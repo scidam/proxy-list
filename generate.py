@@ -133,7 +133,7 @@ async def check_proxy(proxy):
 
     for website_name, url in CHECK_URLS:
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=False)) as session:
                 start = time.time()
                 status_code = 404
                 total_time = None
