@@ -10,7 +10,7 @@ CURRENT_TIME="$(date -u)"
 
 git -C $CURRENT_DIR checkout master
 
-eval "$(pyenv init -)" && pyenv shell sci && python $CURRENT_DIR/generate.py
+eval "$(pyenv init -)" && pyenv shell scipy && python $CURRENT_DIR/generate.py
 
 git -C $CURRENT_DIR add proxy.json
 
