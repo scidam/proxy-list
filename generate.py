@@ -12,6 +12,7 @@ import mechanize
 import ipaddress
 from bs4 import BeautifulSoup
 from conf import (TIMEOUT, CHECK_URLS)
+import os
 
 
 def verify_ip_port(ip, port):
@@ -197,5 +198,6 @@ if __name__ == "__main__":
                'proxies': sorted_data
                }
 
-    with open('proxy.json', 'w') as f:
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    with open(os.path.join(dir_path, 'proxy.json'), 'w') as f:
         f.write(json.dumps(to_json, sort_keys=True, indent=4))
