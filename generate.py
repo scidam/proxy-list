@@ -1,6 +1,18 @@
-from concurrent.futures import ThreadPoolExecutor
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*-
+"""
+Created Date: Tuesday April 13th 2021
+Author: Dmitry Kislov
+E-mail: kislov@easydan.com
+-----
+Last Modified: Tuesday, April 13th 2021, 12:50:15 pm
+Modified By: Dmitry Kislov
+-----
+"""
+
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from urllib.request import urlopen
-from collections import Counter
+from urllib.error import URLError, HTTPError
 from operator import itemgetter
 from datetime import datetime
 import json
@@ -18,7 +30,7 @@ import os
 def verify_ip_port(ip, port):
     try:
         ipaddress.ip_address(ip)
-    except:
+    except ValueError:
         return False
     try:
         if not (1 <= int(port) <= 65535):
@@ -37,8 +49,27 @@ class Source:
     def read_url(self):
         data = None
         if self.url:
-            with urlopen(self.url) as handler:
-                data = handler.read().decode('utf-8')
+            try:
+                with urlopen(self.url) as handler:
+                    data = handler.read().decode('utf-8')
+            except (HTTPError, URLError):
+                pass
+        return data
+
+    def read_mech_url(self, extra_headers=None):
+        br = mechanize.Browser()
+        br.set_handle_robots(False)
+        br.addheaders = [('User-agent', 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1) Gecko/2008071615 Fedora/3.0.1-1.fc9 Firefox/3.0.1')]
+        if extra_headers is not None:
+            br.addheaders += extra_headers
+        data = None
+        try:
+            resp = br.open(self.url)
+            data = resp.read()
+        except (HTTPError, URLError):
+            pass
+        finally:
+            br.close()
         return data
 
     def get_data(self):
@@ -59,7 +90,7 @@ class SpysList(Source):
                     try:
                         ip, port = line.split()[0].split(':')
                         result.append((ip, port))
-                    except:
+                    except ValueError:
                         pass
         return result
 
@@ -70,16 +101,7 @@ class FreeProxyList(Source):
     url = 'https://free-proxy-list.net'
 
     def read_url(self):
-        br = mechanize.Browser()
-        br.set_handle_robots(False)
-        # TODO: Probably need user-agent rotation;
-        # NOTE: These requests are performed rarely
-        br.addheaders = [('User-agent', 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1) Gecko/2008071615 Fedora/3.0.1-1.fc9 Firefox/3.0.1')]
-        data = None
-        resp = br.open(self.url)
-        data = resp.read()
-        br.close()
-        return data
+        return self.read_mech_url()
 
     def get_data(self):
         data = self.read_url()
@@ -103,14 +125,7 @@ class ProxyDailyList(Source):
     url = 'https://proxy-daily.com/'
 
     def read_url(self):
-        br = mechanize.Browser()
-        br.set_handle_robots(False)
-        br.addheaders = [('User-agent', 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1) Gecko/2008071615 Fedora/3.0.1-1.fc9 Firefox/3.0.1')]
-        data = None
-        resp = br.open(self.url)
-        data = resp.read()
-        br.close()
-        return data
+        return self.read_mech_url()
 
     def get_data(self):
         data = self.read_url()
@@ -118,8 +133,32 @@ class ProxyDailyList(Source):
         alist = soup.find("div", class_="centeredProxyList freeProxyStyle")
         result = list()
         for item in alist.text.strip().split():
-            splitted = item.split(':')
+            splitted = tuple(item.split(':'))
             result.append(splitted)
+        return result
+
+
+class PzzqzProxy(Source):
+    """Get proxies from pzzqz.com"""
+
+    url = "https://api.pzzqz.com/api/v1.0/proxy/list/"
+    api_key = os.environ['PZZQZ_APIKEY']
+
+    def read_url(self):
+        return self.read_mech_url(extra_headers=[('X-Api-Key', self.api_key)])
+
+    def get_data(self):
+        data = self.read_url()
+        result = list()
+        if data is not None:
+            json_data = json.loads(data)
+            try:
+                result = list(map(
+                    lambda x: tuple(x.split(':')),
+                    map(itemgetter('proxy'), json_data['data'])
+                ))
+            except KeyError:
+                pass
         return result
 
 
@@ -134,12 +173,18 @@ async def check_proxy(proxy):
 
     for website_name, url in CHECK_URLS:
         try:
-            async with aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=False)) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                connector=aiohttp.TCPConnector(ssl=False)
+            ) as session:
                 start = time.time()
                 status_code = 404
                 total_time = None
                 error_msg = 'no'
-                async with session.get(url, proxy='http://{}:{}'.format(ip, port)) as resp:
+                async with session.get(
+                    url,
+                    proxy='http://{}:{}'.format(ip, port)
+                ) as resp:
                     status_code = resp.status
                     await resp.text()
                     end = time.time()
@@ -159,6 +204,7 @@ async def check_proxy(proxy):
             result[website_name + '_total_time'] = total_time
     return result
 
+
 async def runner(complete_list):
     tasks = [check_proxy(item) for item in complete_list]
     return await asyncio.gather(*tasks)
@@ -166,7 +212,31 @@ async def runner(complete_list):
 
 def main():
     result = []
-    complete_list = FreeProxyList().get_data() + SpysList().get_data() + ProxyDailyList().get_data()
+
+    sources = [
+        # FreeProxyList().get_data,
+        # SpysList().get_data,
+        # ProxyDailyList().get_data,
+        PzzqzProxy().get_data
+    ]
+    futures = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for s in sources:
+            futures.append(pool.submit(s))
+
+        for f in as_completed(futures, timeout=TIMEOUT * 3):
+            try:
+                data = f.result()
+            except TimeoutError:
+                print("Timeout error...")
+            except Exception as exc:
+                print("Exception generated: {}".format(exc))
+            else:
+                result += data
+
+    # remove duplicates (ip, port)
+    complete_list = list(set(tuple(result)))
+
     filtered_list = filter(lambda x: verify_ip_port(*x), complete_list)
 
     try:
@@ -180,16 +250,21 @@ def main():
 if __name__ == "__main__":
     data = main()
 
-    # proxy-list filtering: removing duplicates
-    ip_cntr = Counter(map(itemgetter('ip'), data))
-    filtered_data = list(filter(lambda x: ip_cntr[x['ip']] == 1, data))
-
     # sorting by the number of successfull queries
     try:
         # calculate the number of errorless queries for each proxy
-        errorless_measures = [sum(item[resource + '_error'] == 'no' for resource in map(itemgetter(0), CHECK_URLS)) for item in filtered_data]
-        argsorted = sorted(range(len(errorless_measures)), key=errorless_measures.__getitem__, reverse=True)
-        sorted_data = [filtered_data[ind] for ind in argsorted]
+        errorless_measures = [
+            sum(
+                item[resource + '_error'] == 'no'
+                for resource in map(itemgetter(0), CHECK_URLS)
+            ) for item in data
+        ]
+        argsorted = sorted(
+            range(len(errorless_measures)),
+            key=errorless_measures.__getitem__,
+            reverse=True
+        )
+        sorted_data = [data[ind] for ind in argsorted]
     except KeyError:
         pass
 
