@@ -5,7 +5,7 @@ Created Date: Tuesday April 13th 2021
 Author: Dmitry Kislov
 E-mail: kislov@easydan.com
 -----
-Last Modified: Tuesday, April 13th 2021, 12:50:15 pm
+Last Modified: Tuesday, April 20th 2021, 7:15:57 am
 Modified By: Dmitry Kislov
 -----
 """
@@ -142,7 +142,7 @@ class PzzqzProxy(Source):
     """Get proxies from pzzqz.com"""
 
     url = "https://api.pzzqz.com/api/v1.0/proxy/list/"
-    api_key = os.environ['PZZQZ_APIKEY']
+    api_key = os.environ.get('PZZQZ_APIKEY', '')
 
     def read_url(self):
         return self.read_mech_url(extra_headers=[('X-Api-Key', self.api_key)])
@@ -214,25 +214,32 @@ def main():
     result = []
 
     sources = [
-        # FreeProxyList().get_data,
-        # SpysList().get_data,
-        # ProxyDailyList().get_data,
+        FreeProxyList().get_data,
+        SpysList().get_data,
+        ProxyDailyList().get_data,
         PzzqzProxy().get_data
     ]
-    futures = []
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        for s in sources:
-            futures.append(pool.submit(s))
 
-        for f in as_completed(futures, timeout=TIMEOUT * 3):
-            try:
-                data = f.result()
-            except TimeoutError:
-                print("Timeout error...")
-            except Exception as exc:
-                print("Exception generated: {}".format(exc))
-            else:
-                result += data
+     # ---------- get data synchronously ---------------
+    for job in sources:
+        result += job()
+
+    # ---------- get data using threads ----------------
+    # futures = []
+    # with ThreadPoolExecutor(max_workers=2) as pool:
+    #     for s in sources:
+    #         futures.append(pool.submit(s))
+
+    #     for f in as_completed(futures, timeout=TIMEOUT * 3):
+    #         try:
+    #             data = f.result()
+    #         except TimeoutError:
+    #             print("Timeout error...")
+    #         except Exception as exc:
+    #             print("Exception generated: {}".format(exc))
+    #         else:
+    #             result += data
+    # ---------------------------------------------------
 
     # remove duplicates (ip, port)
     complete_list = list(set(tuple(result)))
